@@ -1,0 +1,769 @@
+import streamlit as st
+import sqlite3
+import pandas as pd
+from datetime import datetime
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+DB_NAME = "she_system.db"
+
+# ============================================================
+# DATABASE CONNECTION
+# ============================================================
+
+def get_connection():
+    return sqlite3.connect(
+        DB_NAME,
+        check_same_thread=False
+    )
+
+# ============================================================
+# DATABASE SETUP
+# ============================================================
+
+def init_db():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # --------------------------------------------------------
+    # USERS TABLE
+    # --------------------------------------------------------
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password TEXT,
+            role TEXT,
+            section TEXT,
+            status TEXT DEFAULT 'Pending'
+        )
+    """)
+
+    # --------------------------------------------------------
+    # FIX OLD DATABASES
+    # Add "status" if the existing users table doesn't have it.
+    # --------------------------------------------------------
+    cursor.execute("PRAGMA table_info(users)")
+    user_columns = [
+        column[1]
+        for column in cursor.fetchall()
+    ]
+
+    if "status" not in user_columns:
+        cursor.execute("""
+            ALTER TABLE users
+            ADD COLUMN status TEXT DEFAULT 'Pending'
+        """)
+
+    # --------------------------------------------------------
+    # SHE REPORTS / INCIDENTS TABLE
+    # --------------------------------------------------------
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS she_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            username TEXT,
+            section TEXT,
+            hazard_type TEXT,
+            description TEXT,
+            severity TEXT,
+            status TEXT DEFAULT 'Open'
+        )
+    """)
+
+    # --------------------------------------------------------
+    # FIX OLD SHE REPORTS TABLE
+    # --------------------------------------------------------
+    cursor.execute(
+        "PRAGMA table_info(she_reports)"
+    )
+    report_columns = [
+        column[1]
+        for column in cursor.fetchall()
+    ]
+
+    if "status" not in report_columns:
+        cursor.execute("""
+            ALTER TABLE she_reports
+            ADD COLUMN status TEXT DEFAULT 'Open'
+        """)
+
+    # --------------------------------------------------------
+    # CREATE DEFAULT ADMIN
+    # --------------------------------------------------------
+    cursor.execute(
+        "SELECT COUNT(*) FROM users"
+    )
+    user_count = cursor.fetchone()[0]
+
+    if user_count == 0:
+        cursor.execute("""
+            INSERT INTO users
+            (
+                username,
+                password,
+                role,
+                section,
+                status
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            "admin",
+            "admin123",
+            "Overall Controller",
+            "All Sections",
+            "Approved"
+        ))
+    else:
+        cursor.execute("""
+            UPDATE users
+            SET status = 'Approved'
+            WHERE username = 'admin'
+        """)
+
+    conn.commit()
+    conn.close()
+
+# Run database initialization
+init_db()
+
+# ============================================================
+# UNIVERSITY SECTIONS
+# ============================================================
+
+UNIVERSITY_SECTIONS = [
+    "Main Campus & Administration Blocks",
+    "Innovation Hub",
+    "Printing Press",
+    "Works and Estates",
+    "Mining & Geology Section",
+    "University Canteen & Kitchens",
+    "Student Hostels & Residences",
+    "Agro-Industrial Park - Medicinal Plants Unit",
+    "Agro-Industrial Park - Block Lick Production",
+    "Agro-Industrial Park - Dairy Unit",
+    "Agro-Industrial Park - Poultry Unit",
+    "Agro-Industrial Park - Black Soldier Fly Production",
+    "University Farm & General Fields",
+    "Research Laboratories & Central Analytical Services"
+]
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if "username" not in st.session_state:
+    st.session_state.username = ""
+
+if "role" not in st.session_state:
+    st.session_state.role = ""
+
+if "section" not in st.session_state:
+    st.session_state.section = ""
+
+# ============================================================
+# LOGIN / REGISTRATION GATE
+# ============================================================
+
+if not st.session_state.logged_in:
+    st.title(
+        "🛡️ CUT Digital SHE Management System"
+    )
+    st.caption(
+        "Safety, Health & Environment Management Platform"
+    )
+
+    tab_login, tab_register = st.tabs([
+        "🔑 Login",
+        "📝 Request Account Access"
+    ])
+
+    # ========================================================
+    # LOGIN TAB
+    # ========================================================
+    with tab_login:
+        st.markdown(
+            "### 🔐 Platform Login"
+        )
+        with st.form("login_form"):
+            username_input = st.text_input(
+                "Username"
+            )
+            password_input = st.text_input(
+                "Password",
+                type="password"
+            )
+            submit_btn = st.form_submit_button(
+                "🚀 Login to Platform"
+            )
+
+            if submit_btn:
+                if (
+                    username_input.strip() == ""
+                    or password_input == ""
+                ):
+                    st.warning(
+                        "Please enter both username "
+                        "and password."
+                    )
+                else:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT
+                            role,
+                            section,
+                            status
+                        FROM users
+                        WHERE username = ?
+                        AND password = ?
+                    """, (
+                        username_input.strip(),
+                        password_input
+                    ))
+                    user = cursor.fetchone()
+                    conn.close()
+
+                    if user:
+                        role, section, approval_status = user
+                        if approval_status == "Approved":
+                            st.session_state.logged_in = True
+                            st.session_state.username = (
+                                username_input.strip()
+                            )
+                            st.session_state.role = role
+                            st.session_state.section = section
+                            st.success(
+                                "✅ Access granted! "
+                                "Loading platform..."
+                            )
+                            st.rerun()
+                        else:
+                            st.warning(
+                                "⏳ Your account request is "
+                                "pending approval by the "
+                                "Overall Controller."
+                            )
+                    else:
+                        st.error(
+                            "❌ Invalid username or password."
+                        )
+
+    # ========================================================
+    # REGISTRATION TAB
+    # ========================================================
+    with tab_register:
+        st.markdown(
+            "### 📝 Request a Section Contributor Account"
+        )
+        st.write(
+            "Anyone can install the application, but "
+            "accounts require administrator authorization "
+            "before access is granted."
+        )
+        with st.form("reg_form"):
+            new_user = st.text_input(
+                "Choose Username"
+            )
+            new_pass = st.text_input(
+                "Choose Password",
+                type="password"
+            )
+            new_sect = st.selectbox(
+                "Select Your Operational Unit / Section",
+                UNIVERSITY_SECTIONS
+            )
+            reg_btn = st.form_submit_button(
+                "📨 Submit Access Request"
+            )
+
+            if reg_btn:
+                if (
+                    new_user.strip() == ""
+                    or new_pass.strip() == ""
+                ):
+                    st.warning(
+                        "Please fill out all fields."
+                    )
+                elif len(new_user.strip()) < 3:
+                    st.warning(
+                        "Username must contain at least "
+                        "3 characters."
+                    )
+                elif len(new_pass) < 4:
+                    st.warning(
+                        "Password must contain at least "
+                        "4 characters."
+                    )
+                else:
+                    try:
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT INTO users
+                            (
+                                username,
+                                password,
+                                role,
+                                section,
+                                status
+                            )
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (
+                            new_user.strip(),
+                            new_pass,
+                            "Section Contributor",
+                            new_sect,
+                            "Pending"
+                        ))
+                        conn.commit()
+                        conn.close()
+                        st.success(
+                            "✅ Request successfully submitted! "
+                            "Please wait for the Overall Controller "
+                            "to approve your account."
+                        )
+                    except sqlite3.IntegrityError:
+                        st.error(
+                            "❌ That username is already taken. "
+                            "Please choose another."
+                        )
+                    except Exception as e:
+                        st.error(
+                            f"Database error: {e}"
+                        )
+
+    st.stop()
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.markdown(
+    "### ⚡ Active Session"
+)
+st.sidebar.markdown(
+    f"👤 **User:** `{st.session_state.username}`"
+)
+st.sidebar.markdown(
+    f"🛡️ **Role:** {st.session_state.role}"
+)
+st.sidebar.markdown(
+    f"🏢 **Unit:** {st.session_state.section}"
+)
+
+# ============================================================
+# LOGOUT
+# ============================================================
+
+if st.sidebar.button(
+    "🔒 Secure Logout"
+):
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.session_state.role = ""
+    st.session_state.section = ""
+    st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    "### 🧭 Navigation Hub"
+)
+
+# ============================================================
+# NAVIGATION FOR ADMIN & CONTRIBUTORS
+# ============================================================
+
+if st.session_state.role == "Overall Controller":
+    menu = st.sidebar.radio(
+        "Select Operation",
+        [
+            "📊 Executive Command Dashboard",
+            "📝 Submit Field Report / Hazard",
+            "📄 Master Audit & CSV Exports",
+            "⚙️ System Administration & Approvals"
+        ],
+        label_visibility="collapsed"
+    )
+else:
+    menu = st.sidebar.radio(
+        "Select Operation",
+        [
+            "📊 Unit Safety Dashboard",
+            "📝 Submit Field Report / Hazard"
+        ],
+        label_visibility="collapsed"
+    )
+
+# ============================================================
+# DATABASE CONNECTION
+# ============================================================
+
+conn = get_connection()
+
+# ============================================================
+# EXECUTIVE / UNIT DASHBOARD
+# ============================================================
+
+if menu in [
+    "📊 Executive Command Dashboard",
+    "📊 Unit Safety Dashboard"
+]:
+    st.title(
+        "📊 Institutional Safety & Health Dashboard"
+    )
+
+    if st.session_state.role == "Overall Controller":
+        df = pd.read_sql(
+            "SELECT * FROM she_reports",
+            conn
+        )
+        st.markdown(
+            "### 🌍 Global University Safety Overview"
+        )
+        st.info(
+            "👑 Overall Controller view: "
+            "All university sections are visible."
+        )
+    else:
+        df = pd.read_sql(
+            """
+            SELECT *
+            FROM she_reports
+            WHERE section = ?
+            ORDER BY id DESC
+            """,
+            conn,
+            params=(
+                st.session_state.section,
+            )
+        )
+        st.markdown(
+            f"### 📍 Section Safety Stream: "
+            f"{st.session_state.section}"
+        )
+        st.info(
+            "🔒 **Confidentiality Notice:** "
+            "You are viewing reports belonging "
+            "to your assigned unit."
+        )
+
+    if not df.empty:
+        total_reports = len(df)
+        open_reports = len(
+            df[df["status"] == "Open"]
+        )
+        resolved_reports = len(
+            df[df["status"] == "Resolved"]
+        )
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric(
+            "📋 Total Reports Logged",
+            total_reports
+        )
+        col2.metric(
+            "⚠️ Open Hazards",
+            open_reports
+        )
+        col3.metric(
+            "✅ Resolved Issues",
+            resolved_reports
+        )
+
+        st.markdown("---")
+        st.subheader(
+            "📋 Live Records Feed"
+        )
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info(
+            "✨ All clear! No safety logs or incidents "
+            "recorded for this view yet."
+        )
+
+# ============================================================
+# FIELD REPORTING
+# ============================================================
+
+elif menu == "📝 Submit Field Report / Hazard":
+    st.title(
+        "📝 Field Reporting & Incident Log"
+    )
+    st.write(
+        "Record hazards, near misses, incidents, "
+        "inspections and audit findings."
+    )
+
+    with st.form("report_form"):
+        if st.session_state.role == "Overall Controller":
+            selected_section = st.selectbox(
+                "🏢 Target Operational Unit / Department",
+                UNIVERSITY_SECTIONS
+            )
+        else:
+            selected_section = st.text_input(
+                "🏢 Assigned Unit",
+                value=st.session_state.section,
+                disabled=True
+            )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            hazard_type = st.selectbox(
+                "📌 Report Category",
+                [
+                    "Hazard Identification",
+                    "Near Miss",
+                    "Incident / Injury",
+                    "Routine Inspection",
+                    "Audit Non-Conformance"
+                ]
+            )
+        with col2:
+            severity = st.selectbox(
+                "⚡ Risk / Severity Level",
+                [
+                    "Low",
+                    "Medium",
+                    "High",
+                    "Critical"
+                ]
+            )
+
+        description = st.text_area(
+            "📝 Detailed Findings, Observations, "
+            "or Required Corrective Actions",
+            height=180
+        )
+
+        submit_report = st.form_submit_button(
+            "🚀 Transmit Secure Report"
+        )
+
+        if submit_report:
+            if description.strip() == "":
+                st.warning(
+                    "⚠️ Please provide a description "
+                    "of the finding."
+                )
+            else:
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO she_reports
+                        (
+                            timestamp,
+                            username,
+                            section,
+                            hazard_type,
+                            description,
+                            severity,
+                            status
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        datetime.now().strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                        st.session_state.username,
+                        selected_section,
+                        hazard_type,
+                        description.strip(),
+                        severity,
+                        "Open"
+                    ))
+                    conn.commit()
+                    st.success(
+                        f"✅ Success! Report securely logged "
+                        f"for {selected_section}."
+                    )
+                except Exception as e:
+                    st.error(
+                        f"Unable to save report: {e}"
+                    )
+
+# ============================================================
+# MASTER AUDIT & CSV EXPORT
+# ============================================================
+
+elif (
+    menu == "📄 Master Audit & CSV Exports"
+    and st.session_state.role == "Overall Controller"
+):
+    st.title(
+        "📄 Audit & Statutory Reporting Suite"
+    )
+    st.write(
+        "Master view of all SHE reports and records."
+    )
+
+    df_all = pd.read_sql(
+        """
+        SELECT *
+        FROM she_reports
+        ORDER BY id DESC
+        """,
+        conn
+    )
+
+    if not df_all.empty:
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric(
+            "📋 Total",
+            len(df_all)
+        )
+        col2.metric(
+            "🟢 Open",
+            len(
+                df_all[
+                    df_all["status"] == "Open"
+                ]
+            )
+        )
+        col3.metric(
+            "🔴 Critical",
+            len(
+                df_all[
+                    df_all["severity"] == "Critical"
+                ]
+            )
+        )
+        col4.metric(
+            "✅ Resolved",
+            len(
+                df_all[
+                    df_all["status"] == "Resolved"
+                ]
+            )
+        )
+
+        st.markdown("---")
+        st.dataframe(
+            df_all,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        csv_data = df_all.to_csv(
+            index=False
+        ).encode("utf-8")
+        st.download_button(
+            label="📥 Download Master CSV Compliance Report",
+            data=csv_data,
+            file_name="CUT_SHE_Master_Report.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info(
+            "No reports to export yet."
+        )
+
+# ============================================================
+# SYSTEM ADMINISTRATION & APPROVALS
+# ============================================================
+
+elif (
+    menu == "⚙️ System Administration & Approvals"
+    and st.session_state.role == "Overall Controller"
+):
+    st.title(
+        "⚙️ User Governance & Access Approvals"
+    )
+    st.write(
+        "Review pending account requests and "
+        "manage platform users."
+    )
+
+    st.subheader(
+        "⏳ Pending Account Requests"
+    )
+    pending_df = pd.read_sql(
+        """
+        SELECT
+            username,
+            role,
+            section
+        FROM users
+        WHERE status = ?
+        ORDER BY username
+        """,
+        conn,
+        params=("Pending",)
+    )
+
+    if not pending_df.empty:
+        st.dataframe(
+            pending_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        with st.form("approval_form"):
+            user_to_approve = st.selectbox(
+                "Select Username to Authorize",
+                pending_df["username"].tolist()
+            )
+            approve_btn = st.form_submit_button(
+                "✅ Approve Selected User Account"
+            )
+
+            if approve_btn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET status = ?
+                    WHERE username = ?
+                    """,
+                    (
+                        "Approved",
+                        user_to_approve
+                    )
+                )
+                conn.commit()
+                st.success(
+                    f"✅ User '{user_to_approve}' "
+                    f"has been successfully approved!"
+                )
+                st.rerun()
+    else:
+        st.info(
+            "✅ No pending account requests right now."
+        )
+
+    st.markdown("---")
+    st.subheader(
+        "👥 All System Accounts"
+    )
+    users_df = pd.read_sql(
+        """
+        SELECT
+            username,
+            role,
+            section,
+            status
+        FROM users
+        ORDER BY username
+        """,
+        conn
+    )
+    st.dataframe(
+        users_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+# ============================================================
+# CLOSE DATABASE
+# ============================================================
+
+conn.close()
