@@ -346,7 +346,7 @@ if menu in [
     st.title("📊 Institutional Safety & Health Dashboard")
 
     if st.session_state.role == "Overall Controller":
-        df = pd.read_sql("SELECT * FROM she_reports", conn)
+        df = pd.read_sql("SELECT * FROM she_reports ORDER BY id DESC", conn)
         st.markdown("### 🌍 Global University Safety Overview")
         st.info("👑 Overall Controller view: All university sections are visible.")
     else:
@@ -372,6 +372,28 @@ if menu in [
         col1.metric("📋 Total Reports Logged", total_reports)
         col2.metric("⚠️ Open Hazards", open_reports)
         col3.metric("✅ Resolved Issues", resolved_reports)
+
+        st.markdown("---")
+        
+        # Interactive Status Close-out Expander
+        with st.expander("🛠️ Update Hazard Status (Close Out Open Items)"):
+            open_items = df[df["status"] == "Open"]
+            if not open_items.empty:
+                selected_report_id = st.selectbox(
+                    "Select Report ID to Resolve",
+                    open_items["id"].tolist()
+                )
+                if st.button("✅ Mark Selected Report as Resolved"):
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE she_reports SET status = 'Resolved' WHERE id = ?",
+                        (selected_report_id,)
+                    )
+                    conn.commit()
+                    st.success(f"Report ID {selected_report_id} has been marked as Resolved!")
+                    st.rerun()
+            else:
+                st.info("✨ No open hazards requiring resolution in this view.")
 
         st.markdown("---")
         st.subheader("📋 Live Records Feed")
